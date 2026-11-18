@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">예산 잔액</string>
+    <string name="widget_label">예산별 잔여금액</string>
+    <string name="widget_desc">통장 잔액과 예산별 남은 금액을 보여줍니다</string>
+</resources>
