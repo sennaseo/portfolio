@@ -125,7 +125,7 @@ class MainActivity : Activity() {
                 progressTintList = ColorStateList.valueOf(color)
             }
             v.findViewById<TextView>(R.id.b_sub).text = "예산 ${won(b.amount)} 중 ${won(spent)} 사용"
-            v.setOnClickListener { editBudget(b) }
+            v.setOnClickListener { budgetDetail(b) }
             budgetBox.addView(v)
         }
         if (Store.budgets.isEmpty()) {
@@ -186,6 +186,40 @@ class MainActivity : Activity() {
     }
 
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
+
+    /** 예산을 누르면 이번 기간에 그 예산으로 나간 내역을 보여준다. */
+    private fun budgetDetail(b: Budget) {
+        val start = Store.periodStart()
+        val list = synchronized(Store) {
+            Store.txs.filter { it.type == Parser.EXPENSE && it.budgetId == b.id && it.time >= start }.sortedByDescending { it.time }
+        }
+        val box = form()
+        box.addView(TextView(this).apply {
+            text = "예산 ${won(b.amount)} · 사용 ${won(list.sumOf { it.amount })} · ${list.size}건"
+            setTextColor(getColor(R.color.sub)); textSize = 13f
+            setPadding(0, 0, 0, dp(10))
+        })
+        var dialog: AlertDialog? = null
+        if (list.isEmpty()) box.addView(TextView(this).apply {
+            text = "이번 기간에 사용한 내역이 없어요."
+            setTextColor(getColor(R.color.sub)); textSize = 14f
+            setPadding(0, dp(12), 0, dp(12))
+        })
+        for (t in list) {
+            val row = txRow(t, box)
+            row.findViewById<TextView>(R.id.t_sub).text = dateFmt.format(Date(t.time))
+            row.setBackgroundColor(0)
+            row.setPadding(0, dp(9), 0, dp(9))
+            row.setOnClickListener { dialog?.dismiss(); editTx(t) }
+            box.addView(row)
+        }
+        dialog = AlertDialog.Builder(this)
+            .setTitle("${b.name}  잔여 ${won(b.amount - list.sumOf { it.amount })}")
+            .setView(android.widget.ScrollView(this).apply { addView(box) })
+            .setPositiveButton("닫기", null)
+            .setNeutralButton("예산 수정") { _, _ -> editBudget(b) }
+            .show()
+    }
 
     private fun editBudget(b: Budget?) {
         val f = form()
