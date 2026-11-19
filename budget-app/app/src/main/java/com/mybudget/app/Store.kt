@@ -192,6 +192,41 @@ object Store {
         save(ctx)
         return if (tx.type == Parser.EXPENSE && tx.budgetId == UNASSIGNED && budgets.isNotEmpty()) tx else null
     }
+
+    /**
+     * 가계부 파일에서 읽은 내역을 넣는다. 이미 있는 내역은 건너뛴다.
+     * 대분류와 같은 이름의 예산에 배정하고, 없으면 (createBudgets일 때) 예산 0원으로 새로 만든다.
+     * 한 가지 대분류로만 쓰인 가맹점은 이후 알림도 그 예산으로 자동 분류되도록 기억한다.
+     * @return 새로 추가된 건수
+     */
+    @Synchronized
+    fun importRows(ctx: Context, rows: List<Importer.Row>, createBudgets: Boolean): Int {
+        load(ctx)
+        val expenses = rows.filter { it.type == Parser.EXPENSE }
+        if (createBudgets) {
+            for (cat in expenses.map { it.category }.distinct()) {
+                if (cat.isNotEmpty() && cat != "미분류" && budgets.none { it.name == cat }) budgets.add(Budget(newId(), cat, 0, ""))
+            }
+        }
+        fun budgetOf(cat: String) = budgets.firstOrNull { it.name == cat }?.id ?: UNASSIGNED
+        for ((merchant, list) in expenses.groupBy { it.merchant }) {
+            val cats = list.map { it.category }.distinct()
+            if (merchant.isNotEmpty() && cats.size == 1 && budgetOf(cats[0]) != UNASSIGNED) merchantMap[merchant] = budgetOf(cats[0])
+        }
+        var added = 0
+        for (r in rows) {
+            val dup = txs.any {
+                it.type == r.type && it.amount == r.amount &&
+                    ((it.time == r.time && it.merchant == r.merchant) || (it.source != "import" && abs(it.time - r.time) < 2 * 60_000))
+            }
+            if (dup) continue
+            val budgetId = if (r.type == Parser.EXPENSE) budgetOf(r.category) else UNASSIGNED
+            txs.add(Tx(newId(), r.time, r.amount, r.type, r.merchant, budgetId, "", "import"))
+            added++
+        }
+        save(ctx)
+        return added
+    }
 }
 
 fun won(v: Long) = "%,d원".format(v)

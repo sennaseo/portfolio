@@ -7,6 +7,7 @@ import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
+import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.text.InputType
@@ -49,6 +50,16 @@ class MainActivity : Activity() {
     }
 
     private fun handleIntent(intent: Intent?) {
+        val file: Uri? = when (intent?.action) {
+            Intent.ACTION_VIEW -> intent.data
+            Intent.ACTION_SEND -> intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            else -> null
+        }
+        if (file != null) {
+            intent?.action = Intent.ACTION_MAIN
+            importFile(file)
+            return
+        }
         val id = intent?.getLongExtra(NotiListener.EXTRA_TX, 0L) ?: 0L
         if (id == 0L) return
         intent?.removeExtra(NotiListener.EXTRA_TX)
@@ -320,6 +331,7 @@ class MainActivity : Activity() {
             "잔액 기준 앱: $src",
             "감지에서 제외할 앱",
             "알림 문구 테스트",
+            "뱅크샐러드 엑셀 가져오기",
             "통장 잔액 직접 수정",
             "알림 접근 설정 열기",
         )
@@ -329,8 +341,9 @@ class MainActivity : Activity() {
                 1 -> pickBalanceApp()
                 2 -> pickBlockedApps()
                 3 -> testParse()
-                4 -> editBalance()
-                5 -> openAccessSettings()
+                4 -> pickImportFile()
+                5 -> editBalance()
+                6 -> openAccessSettings()
             }
         }.show()
     }
@@ -399,6 +412,53 @@ class MainActivity : Activity() {
                         "잔액: ${p.balance?.let { won(it) } ?: "(문구에 없음)"}\n" +
                         "예산: ${Store.budgetName(Store.autoBudget(p.merchant))}"
                 AlertDialog.Builder(this).setTitle("인식 결과").setMessage(msg).setPositiveButton("닫기", null).show()
+            }
+            .setNegativeButton("취소", null).show()
+    }
+
+    // ---------- 가계부 파일 가져오기 ----------
+
+    private fun pickImportFile() {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+        @Suppress("DEPRECATION")
+        startActivityForResult(i, 2)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 2 && resultCode == RESULT_OK) data?.data?.let { importFile(it) }
+    }
+
+    private fun importFile(uri: Uri) {
+        val result = try {
+            contentResolver.openInputStream(uri)!!.use { Importer.read(it) }
+        } catch (e: Exception) {
+            AlertDialog.Builder(this).setTitle("가져오기 실패")
+                .setMessage("뱅크샐러드에서 내보낸 가계부 엑셀(.xlsx) 파일인지 확인해 주세요.\n\n${e.message ?: ""}")
+                .setPositiveButton("닫기", null).show()
+            return
+        }
+        val expenses = result.rows.filter { it.type == Parser.EXPENSE }
+        val byCat = expenses.groupBy { it.category }.mapValues { e -> e.value.sumOf { it.amount } }.entries.sortedByDescending { it.value }
+        val missing = byCat.map { it.key }.filter { c -> c.isNotEmpty() && c != "미분류" && Store.budgets.none { it.name == c } }
+        val msg = StringBuilder("지출 ${expenses.size}건 · 합계 ${won(expenses.sumOf { it.amount })}\n")
+        msg.append("수입 ${result.rows.size - expenses.size}건 · 이체 ${result.skippedTransfers}건은 예산에서 제외\n\n")
+        byCat.forEach { msg.append("${it.key.ifEmpty { "미분류" }}  ${won(it.value)}\n") }
+        val f = form()
+        val create = CheckBox(this).apply {
+            text = "없는 대분류 ${missing.size}개를 예산으로 만들기 (금액은 0원, 나중에 수정)"
+            isChecked = true
+            visibility = if (missing.isEmpty()) View.GONE else View.VISIBLE
+        }
+        f.addView(TextView(this).apply { text = msg; textSize = 14f; setTextColor(getColor(R.color.text)) })
+        f.addView(create)
+        AlertDialog.Builder(this)
+            .setTitle("가계부 내역 가져오기")
+            .setView(android.widget.ScrollView(this).apply { addView(f) })
+            .setPositiveButton("가져오기") { _, _ ->
+                val n = Store.importRows(this, result.rows, create.isChecked && missing.isNotEmpty())
+                toast("${n}건을 가져왔어요" + if (n < result.rows.size) " (중복 ${result.rows.size - n}건 제외)" else "")
             }
             .setNegativeButton("취소", null).show()
     }
